@@ -1,0 +1,605 @@
+#include "StateMachineLib.h"
+#include <Keypad.h>
+#include <LiquidCrystal.h>
+#include <LiquidMenu.h>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
+#include "AsyncTaskLib.h"
+#include <Button.h>
+//luces
+#define LED_RED 10
+#define LED_GREEN 9
+#define LED_BLUE 7
+//Sensores
+#define PIN_LUZ A0
+#define DHTPIN 38
+#define DHTTYPE    DHT22     // Sensor del Wokwi
+#define LDR_PIN 2
+
+//Notas Musicales
+#define NOTE_B0  31
+#define NOTE_C1  33
+#define NOTE_CS1 35
+#define NOTE_D1  37
+#define NOTE_DS1 39
+#define NOTE_E1  41
+#define NOTE_F1  44
+#define NOTE_FS1 46
+#define NOTE_G1  49
+#define NOTE_GS1 52
+#define NOTE_A1  55
+#define NOTE_AS1 58
+#define NOTE_B1  62
+#define NOTE_C2  65
+#define NOTE_CS2 69
+#define NOTE_D2  73
+#define NOTE_DS2 78
+#define NOTE_E2  82
+#define NOTE_F2  87
+#define NOTE_FS2 93
+#define NOTE_G2  98
+#define NOTE_GS2 104
+#define NOTE_A2  110
+#define NOTE_AS2 117
+#define NOTE_B2  123
+#define NOTE_C3  131
+#define NOTE_CS3 139
+#define NOTE_D3  147
+#define NOTE_DS3 156
+#define NOTE_E3  165
+#define NOTE_F3  175
+#define NOTE_FS3 185
+#define NOTE_G3  196
+#define NOTE_GS3 208
+#define NOTE_A3  220
+#define NOTE_AS3 233
+#define NOTE_B3  247
+#define NOTE_C4  262
+#define NOTE_CS4 277
+#define NOTE_D4  294
+#define NOTE_DS4 311
+#define NOTE_E4  330
+#define NOTE_F4  349
+#define NOTE_FS4 370
+#define NOTE_G4  392
+#define NOTE_GS4 415
+#define NOTE_A4  440
+#define NOTE_AS4 466
+#define NOTE_B4  494
+#define NOTE_C5  523
+#define NOTE_CS5 554
+#define NOTE_D5  587
+#define NOTE_DS5 622
+#define NOTE_E5  659
+#define NOTE_F5  698
+#define NOTE_FS5 740
+#define NOTE_G5  784
+#define NOTE_GS5 831
+#define NOTE_A5  880
+#define NOTE_AS5 932
+#define NOTE_B5  988
+#define NOTE_C6  1047
+#define NOTE_CS6 1109
+#define NOTE_D6  1175
+#define NOTE_DS6 1245
+#define NOTE_E6  1319
+#define NOTE_F6  1397
+#define NOTE_FS6 1480
+#define NOTE_G6  1568
+#define NOTE_GS6 1661
+#define NOTE_A6  1760
+#define NOTE_AS6 1865
+#define NOTE_B6  1976
+#define NOTE_C7  2093
+#define NOTE_CS7 2217
+#define NOTE_D7  2349
+#define NOTE_DS7 2489
+#define NOTE_E7  2637
+#define NOTE_F7  2794
+#define NOTE_FS7 2960
+#define NOTE_G7  3136
+#define NOTE_GS7 3322
+#define NOTE_A7  3520
+#define NOTE_AS7 3729
+#define NOTE_B7  3951
+#define NOTE_C8  4186
+#define NOTE_CS8 4435
+#define NOTE_D8  4699
+#define NOTE_DS8 4978
+#define REST 0
+
+//Valores por defecto
+const float DEF_temp_HIGH=25;
+const float DEF_temp_LOW=20;
+const float DEF_luz_HIGH=550;
+const float DEF_luz_LOW=20;
+const float GAMMA = 0.7;
+const float RL10 = 50;
+//constantes
+float temp_high=DEF_temp_HIGH;
+float temp_low=DEF_temp_LOW;
+float luz_high=DEF_luz_HIGH;
+float luz_low=DEF_luz_LOW;
+
+
+//Sensores
+DHT_Unified dht(DHTPIN, DHTTYPE);
+uint32_t delayMS;
+//boton
+Button button1(53);
+
+// Musicabloquep
+int tempo = 180;
+
+int buzzer = 8;
+
+int melodybloqueo[] = {
+
+NOTE_E5, 8, NOTE_D5, 8, NOTE_FS4, 4, NOTE_GS4, 4, 
+  NOTE_CS5, 8, NOTE_B4, 8, NOTE_D4, 4, NOTE_E4, 4, 
+  NOTE_B4, 8, NOTE_A4, 8, NOTE_CS4, 4, NOTE_E4, 4,
+  NOTE_A4, 2, 
+  
+};
+
+int notes = sizeof(melodybloqueo) / sizeof(melodybloqueo[0]) / 2;
+int wholenote = (60000 * 4) / tempo;
+int divider = 0, noteDuration = 0;
+
+// MaquinaEstados
+enum State
+{
+	inicio = 0,
+	configuracion = 1,
+	monitorAmbiental = 2,
+	bloqueo = 3,
+  alarma= 4,
+  monitorEventos=5
+};
+
+// Input Alias
+enum Input
+{
+	correcto = 0,
+	bloqueado1 = 1,
+	time_out= 2,
+	hall = 3,
+  botton=4,
+  condicion=5,
+  Unknown=6,
+  botton2=7
+};
+
+// Create new StateMachine (numEstados,numTrancisiones)
+StateMachine stateMachine(6, 13);
+
+
+// Stores last user input
+Input input;
+
+//Funciones
+int seguridad(void);
+void bloqueado(void);
+void parpadeo(void);
+void cancionbloqueo(void);
+void nada(void);
+void botoncito(void);
+//Tareas
+AsyncTask taskbloqueado(0,false,[](){bloqueado(); });
+AsyncTask taskparpadeo(0,true,[](){parpadeo(); }); //tarea para encender el led rojo y apagarlo cada 500 milisegundos
+AsyncTask taskboton(0,true,[](){botoncito(); });
+//Pantalla
+const int rs = 12, en = 11, d4 = 5, d5 = 4, d6 = 3, d7 = 2; 
+unsigned char clave[4];
+const char pass[]="1234";
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+const byte ROWS = 4; //four rows
+const byte COLS = 4; //three columns
+unsigned int intentos=0, contadorchar=0,continuar=7;
+char keys[ROWS][COLS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+byte rowPins[ROWS] = {22, 24, 26, 28}; //connect to the row pinouts of the keypad
+byte colPins[COLS] = {30, 32, 34, 36}; //connect to the column pinouts of the keypad
+
+Keypad keypad = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );
+//Menu
+LiquidLine line1(0, 0, "TEMP_HIGH",temp_high);
+LiquidLine line2(0, 1, "TEMP_LOW",temp_low);
+LiquidLine line3(0, 0, "LUZ_HIGH",luz_high);
+LiquidLine line4(0, 1, "LUZ_LOW",luz_low);
+LiquidLine line5(0, 0, "RESET");
+
+LiquidScreen screen;
+
+LiquidMenu menuConfiguracion(lcd);
+void blankFunction() {
+    return;
+}
+
+void setupStateMachine()
+{
+	//Definir las transisiones
+	stateMachine.AddTransition(inicio, bloqueo, []() { return input == bloqueado1; });
+  stateMachine.AddTransition(inicio, configuracion, []() { return input == correcto; });
+  
+	stateMachine.AddTransition(bloqueo, inicio, []() { return input == time_out; });
+	
+	stateMachine.AddTransition(configuracion, monitorAmbiental, []() { return input == botton; });
+  stateMachine.AddTransition(configuracion, configuracion, []() { return input == correcto; });
+
+	stateMachine.AddTransition(monitorAmbiental, configuracion, []() { return input == botton2; });
+	stateMachine.AddTransition(monitorAmbiental, monitorEventos, []() { return input == time_out; });
+  stateMachine.AddTransition(monitorAmbiental, alarma, []() { return input == condicion; });
+
+
+	stateMachine.AddTransition(monitorEventos, monitorAmbiental, []() { return input == time_out; });
+	stateMachine.AddTransition(monitorEventos, configuracion, []() { return input == botton; });
+	stateMachine.AddTransition(monitorEventos, alarma, []() { return input == hall; });
+
+  stateMachine.AddTransition(alarma, inicio, []() { return input == botton; });
+  stateMachine.AddTransition(alarma, monitorAmbiental, []() { return input == time_out; });
+
+	//DEfenir que es lo que hara cando se entre a un estado
+	stateMachine.SetOnEntering(inicio, tareasseguridad);
+	stateMachine.SetOnEntering(configuracion, tareasmenu);
+	stateMachine.SetOnEntering(monitorAmbiental, ambiental);
+	stateMachine.SetOnEntering(bloqueo, tareasbloqueado);
+  stateMachine.SetOnEntering(alarma, alarmado);
+  stateMachine.SetOnEntering(monitorEventos, eventos);
+
+  //Definir que se hara cuando se sale de un estado
+	stateMachine.SetOnLeaving(inicio, []() {Serial.println("Dejando Seguridad");});
+	stateMachine.SetOnLeaving(configuracion, []() {nada(); });
+	stateMachine.SetOnLeaving(monitorAmbiental, []() {Serial.println("Leaving monitorambiental"); });
+	stateMachine.SetOnLeaving(bloqueo, []() {Serial.println("Leaving bloqueo"); });
+  stateMachine.SetOnLeaving(alarma, []() {Serial.println("Leaving alarma"); });
+  stateMachine.SetOnLeaving(monitorEventos, []() {Serial.println("Leaving monitorEventos"); });
+}
+
+void setup() 
+{
+  lcd.begin(16,2);
+	Serial.begin(9600);
+  pinMode(LDR_PIN, INPUT);
+  button1.begin();
+  //MENU
+    screen.add_line(line1);
+    screen.add_line(line2);
+    screen.add_line(line3);
+    screen.add_line(line4);
+    screen.add_line(line5);
+
+    line1.attach_function(1, blankFunction);
+    line2.attach_function(1, blankFunction);
+    line3.attach_function(1, blankFunction);
+    line4.attach_function(1, blankFunction);
+    line5.attach_function(1, blankFunction);
+
+    screen.set_displayLineCount(2);
+
+    menuConfiguracion.add_screen(screen);
+
+    line1.set_decimalPlaces(2);
+  //luces
+  pinMode(LED_RED, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_BLUE, OUTPUT);
+
+  digitalWrite(LED_RED, LOW);
+  digitalWrite(LED_GREEN, LOW);
+  digitalWrite(LED_BLUE, LOW);
+
+	Serial.println("Starting State Machine...");
+	setupStateMachine();	
+	Serial.println("Start Machine Started");
+
+	// Initial state
+	stateMachine.SetState(inicio, false, true);
+}
+
+void loop() 
+{
+	// tasks Update
+  taskbloqueado.Update();
+  taskparpadeo.Update();
+  taskboton.Update();
+	// Update State Machine
+	stateMachine.Update();
+}
+
+//Eleguir transicion
+int selectInput(int a)
+{
+	Input currentInput = Input::Unknown;
+		switch (a)
+		{
+			case 0: currentInput = Input::correcto; 	break;
+			case 1: currentInput = Input::bloqueado1; break;
+			case 2: currentInput = Input::time_out; break;
+      case 3: currentInput = Input::hall; break;
+      case 4: currentInput = Input::botton; break;
+      case 5: currentInput = Input::condicion; break;
+      case 7: currentInput = Input::botton2; break;
+			default: break;
+		}
+	return currentInput;
+}
+//Iniciar las tareas de seguridad
+void tareasseguridad(){
+  taskboton.OnFinish();
+  int seg=0;
+  continuar=0;
+  while(continuar==0){
+   seg=seguridad();
+  }
+  if(seg==0)menuConfiguracion.update();
+   input = selectInput(seg);
+}
+// seguridad
+int seguridad()
+{ 
+  if(contadorchar<4 && intentos<3){
+    char key= keypad.getKey();
+    if(key){
+      Serial.println(key);
+      lcd.setCursor(contadorchar,0);
+      lcd.print("*");
+      clave[contadorchar]=key;
+      contadorchar++;
+      return 0;
+    }
+  }else{
+  if(intentos<3){
+   if(strncmp(pass,clave,4) == 0){
+    lcd.setCursor(0,1);
+    lcd.print("Clave correcta");
+    digitalWrite(LED_GREEN, HIGH);
+    delay(2000);
+    contadorchar=0;
+    intentos=0;
+    digitalWrite(LED_GREEN, LOW);
+    lcd.clear();
+    continuar++;
+    return 0;
+   }else{
+    lcd.setCursor(0,1);
+    lcd.print("Clave incorrecta");
+    digitalWrite(LED_RED, HIGH);
+    contadorchar=0;
+    intentos++;
+    delay(2000);
+    digitalWrite(LED_RED, LOW);
+    lcd.clear();
+    return 0;
+   }
+    }else{
+    lcd.setCursor(0,1);
+    lcd.print("SistemaBloqueado");
+    contadorchar=0;
+    intentos=0;
+    digitalWrite(LED_RED, HIGH);
+    lcd.clear();
+    continuar++;
+    return 1;
+    ;
+    }
+  }
+}
+//Tareas menu
+void tareasmenu(){
+    const char key2=keypad.getKey();
+    if(button1.pressed()){
+      lcd.clear();
+      input = selectInput(4);return;
+    }
+    if(key2){
+      if(key2== 'A'){
+      menuConfiguracion.switch_focus();
+     }
+      switch(menuConfiguracion.get_focusedLine()){
+          case 0:
+          if(key2=='B'){
+            temp_high+=0.5;
+            menuConfiguracion.update();
+          }
+          break;
+          case 1:
+          if(key2=='B'){
+            temp_low+=0.5;
+            menuConfiguracion.update();
+          }
+          break;
+          case 2:
+          if(key2=='B'){
+            luz_high+=0.5;
+            menuConfiguracion.update();
+          }
+          break;
+          case 3:
+          if(key2=='B'){
+            luz_low+=0.5;
+            menuConfiguracion.update();
+          }
+          break;
+          case 4:
+          if(key2=='B'){
+            temp_high=DEF_temp_HIGH;
+            temp_low=DEF_temp_LOW;
+            luz_high=DEF_luz_HIGH;
+            luz_low=DEF_luz_LOW;
+            menuConfiguracion.update();
+          }
+          break;
+      }
+    }
+    if(!key2)input = selectInput(0);
+}
+//Monitor Ambiental
+void ambiental()
+{
+	Serial.println("Monitor Ambiental");
+  taskboton.OnFinish();
+  int con=0;
+  for(int i=0;i<7;i++){
+     con=sensores();
+    if(con==5){
+      break;
+    }
+    if(button1.pressed()){
+       con=7;
+       break;
+    }
+    delay(1000);
+  }
+  if(con==5){
+    input = selectInput(5);return;
+  }else if(con==7){
+      menuConfiguracion.update();
+      input = selectInput(7);return;
+  }
+  input = selectInput(2);
+}
+
+void tareasbloqueado(){
+  bloqueado();
+  taskparpadeo.Start();
+  int time=0;
+  while(time!=9){
+    cancionbloqueo();
+    time+=3;
+  }
+  taskparpadeo.OnFinish();
+  lcd.clear();
+  input = selectInput(2);return;
+}
+void bloqueado()
+{
+  Serial.println("Bloqueo");
+  lcd.setCursor(0,1);
+  lcd.print("SistemaBloqueado");
+}
+
+void alarmado()
+{
+  taskboton.Start();
+  Serial.println("Alarma");
+  digitalWrite(LED_BLUE, HIGH);
+  cancionbloqueo();
+  digitalWrite(LED_BLUE, LOW);
+  input = selectInput(2);
+}
+//MOnitor eventos
+void eventos()
+{
+  Serial.println("Monitor Eventos");
+  int con=0;
+  for(int i=0;i<3;i++){
+     con=luces();
+    if(con==5){
+      break;
+    }
+    if(button1.pressed()){
+       con=4;
+       break;
+    }
+    delay(1000);
+  }
+  if(con==5){
+    input = selectInput(5);return;
+  }else if(con==4){
+      menuConfiguracion.update();
+      input = selectInput(4);return;
+  }
+  input = selectInput(2);
+}
+void cancionbloqueo(){
+ for (int thisNote = 0; thisNote < notes * 2; thisNote = thisNote + 2) {
+
+    // calculates the duration of each note
+    divider = melodybloqueo[thisNote + 1];
+    if (divider > 0) {
+      // regular note, just proceed
+      noteDuration = (wholenote) / divider;
+    } else if (divider < 0) {
+      // dotted notes are represented with negative durations!!
+      noteDuration = (wholenote) / abs(divider);
+      noteDuration *= 1.5; // increases the duration in half for dotted notes
+    }
+
+    // we only play the note for 90% of the duration, leaving 10% as a pause
+    tone(buzzer, melodybloqueo[thisNote], noteDuration * 0.9);
+
+    // Wait for the specief duration before playing the next note.
+    delay(noteDuration);
+
+    // stop the waveform generation before the next note.
+    noTone(buzzer);
+  }
+}
+
+void parpadeo(){
+  digitalWrite(LED_RED, HIGH);
+  delay(500);
+  digitalWrite(LED_RED, LOW);
+}
+void nada(){
+
+}
+int sensores(){
+  int valor=0;
+    // Delay between measurements.
+  delay(delayMS);
+  //lcd.clear;
+  // Get temperature event and print its value.
+  sensors_event_t event;
+  dht.temperature().getEvent(&event);
+  lcd.setCursor(0,0);
+  if (isnan(event.temperature)) {
+    lcd.println(F("Error reading temperature!"));
+  }
+  else {
+    lcd.print(F("Temp: "));
+    lcd.print(event.temperature);
+    lcd.println(F("°C"));
+    if(event.temperature>temp_high){
+       valor= 5;
+    }
+  }
+  lcd.setCursor(0,1);
+  // Get humidity event and print its value.
+  dht.humidity().getEvent(&event);
+  if (isnan(event.relative_humidity)) {
+    lcd.println(F("Error reading humidity!"));
+  }
+  else {
+    lcd.print(F("Hum: "));
+    lcd.print(event.relative_humidity);
+    lcd.println(F("%"));
+  }
+  return valor;
+}
+int luces(){
+  int valor=0;
+  lcd.setCursor(0,1);
+  int analogValue = analogRead(A0);
+  float voltage = analogValue / 1024. * 5;
+  float resistance = 2000 * voltage / (1 - voltage / 5);
+  float lux = pow(RL10 * 1e3 * pow(10, GAMMA) / resistance, (1 / GAMMA));
+  if(lux>luz_high){
+    valor=5;
+  }
+  lcd.print("Luz: ");
+  lcd.print(lux);
+  return valor;
+}
+void botoncito(){
+  if(button1.pressed()){
+    lcd.clear();
+    input = selectInput(4);
+  }
+}
